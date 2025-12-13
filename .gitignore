@@ -1,0 +1,43 @@
+# =====================
+# Generated output
+# =====================
+out/
+media/
+anki/
+*.apkg
+
+# =====================
+# Audio files
+# =====================
+*.wav
+*.mp3
+*.ogg
+*.flac
+
+# =====================
+# Temporary / downloaded files
+# =====================
+gradio_tmp/
+tmp/
+*.tmp
+
+# =====================
+# PDFs and extracted artefacts
+# =====================
+*.pdf
+extract_900ju_pdf/output/
+extract_900ju_pdf/__pycache__/
+
+# =====================
+# OS / editor junk
+# =====================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# =====================
+# Logs
+# =====================
+*.log
