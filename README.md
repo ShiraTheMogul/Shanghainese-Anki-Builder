@@ -5,7 +5,7 @@ This is a Python script for converting a list of Shanghainese sentences into Wug
 The program produced mainly uses Simplified Chinese and was tested with it, as this is the script mainly used in Shanghai. However, Unihan is fully supported and Traditional Chinese texts can be used with no problem. 
 
 ## Pipeline
-```sentences.csv -> romanisation -> TTS audio (WAV/MP3) -> Anki-ready media```
+`sentences.csv -> romanisation -> TTS audio (WAV/MP3) -> Anki-ready media`
 
 ## Structure
 ```
@@ -28,8 +28,7 @@ ZHAB/
 ```
 
 ## Usage
-```bash 
-python zhab.py```
+`bash python zhab.py`
 
 There are several internal config options the user ought to be aware of;
 ```
@@ -81,8 +80,8 @@ genanki>=0.13
 tqdm>=4.65
 ```
 
-```bash
-pip install -r requirements.txt```
+Use:
+`pip install -r requirements.txt`
 
 You also need to install ffmpeg (e.g. `winget install Gyan.FFmpeg`) and add it to PATH. 
 
