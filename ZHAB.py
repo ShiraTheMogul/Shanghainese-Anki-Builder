@@ -39,6 +39,8 @@ import hashlib
 import random
 import subprocess
 import base64
+import re
+import unicodedata
 from urllib.parse import quote
 from pathlib import Path
 from collections import defaultdict
@@ -78,6 +80,9 @@ DECK_ID = 190101002
 BRACKET_UNKNOWN = True
 KEEP_WAV = True
 PRINT_ROMANISATION = False
+FIX_DOUBLED_TEXT = True # for shit pdf conversions
+# CSV romanisation column preference (first one found will be used)
+ROMANISATION_COLUMNS = ["romanisation", "romanisation_pdf", "wugniu_romanisation"]
 
 # Force a specific fn_index (set to 1 to skip autodetect; deprecated):
 FORCE_FN_INDEX: Optional[int] = None
@@ -122,9 +127,64 @@ _CJK_RE = re.compile(
 _PAGE_FRAC_RE = re.compile(r"\b\d+\s*/\s*\d+\b")
 
 
+def is_cjk_char(ch: str) -> bool:
+    return bool(ch) and bool(_CJK_RE.match(ch))
+
 def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+def get_csv_romanisation(row: pd.Series) -> str:
+    for col in ROMANISATION_COLUMNS:
+        if col in row.index:
+            v = str(row.get(col, "")).strip()
+            if v:
+                return v
+    return ""
+
+def norm_key(s: str) -> str:
+    if s is None:
+        return ""
+    s = unicodedata.normalize("NFKC", str(s)).strip()
+    s = s.replace("\ufeff", "").replace("\u200b", "")
+    s = " ".join(s.split())
+    return s
+
+def load_sentence_to_best_rom(df: pd.DataFrame) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for _, row in df.iterrows():
+        sh = norm_key(row.get("shanghainese", ""))
+        if not sh:
+            continue
+        rom = ""
+        for col in ROMANISATION_COLUMNS:
+            if col in df.columns:
+                rom = str(row.get(col, "")).strip()
+                if rom:
+                    break
+        if sh and rom and sh not in mapping:
+            mapping[sh] = rom
+    return mapping
+
+def choose_romanisation(
+    shanghainese: str,
+    romanisation_csv: Optional[str],
+    romap: Dict[str, Any],
+    maxlen: int,
+) -> str:
+    """
+    Use romanisation from CSV if present; otherwise generate it.
+
+    CSV romanisation always wins.
+    """
+    if romanisation_csv:
+        r = str(romanisation_csv).strip()
+        if r:
+            return r
+
+    # Fallback: generate
+    return postprocess_romanisation(
+        romanise_sentence(shanghainese, romap, maxlen)
+    )
 
 def sanitize_text(s: str) -> str:
     s = re.sub(r"\s+", " ", str(s)).strip()
@@ -132,25 +192,96 @@ def sanitize_text(s: str) -> str:
     return s
 
 
+_RE_3_DOUBLE_GROUPS = re.compile(r"(.)\1(.)\2(.)\3")
+_RE_4_SAME = re.compile(r"(.)\1{3,}")  # 4+ same → reduce to 2
+
+def _dedup_sanity(text: str) -> str:
+    # Rule 1: AAAA... -> AA (CJK only)
+    def repl4(m: re.Match) -> str:
+        ch = m.group(1)
+        return (ch * 2) if is_cjk_char(ch) else m.group(0)
+
+    out = _RE_4_SAME.sub(repl4, text)
+
+    # Rule 2: AA BB CC -> A B C (CJK only; repeat to catch chains)
+    while True:
+        def repl3(m: re.Match) -> str:
+            a, b, c = m.group(1), m.group(2), m.group(3)
+            # Only apply if all 3 are CJK (keeps Latin safe)
+            if is_cjk_char(a) and is_cjk_char(b) and is_cjk_char(c):
+                return a + b + c
+            return m.group(0)
+
+        new = _RE_3_DOUBLE_GROUPS.sub(repl3, out)
+        if new == out:
+            break
+        out = new
+
+    return out
+
+# My PDF extractor sucks and I can't be bothered to fix it
+# So I'm doing this nonsense instead
+# Also fixes two common Shanghainese errors
 def undouble_text(s: str) -> str:
-    """
-    Fix pairwise duplicate glyph extraction:
-      我我也也常常常常 -> 我也常常
-    Also handles whole-string duplication:
-      ABCABC -> ABC
-    Removes internal whitespace.
-    """
     s = sanitize_text(s)
     compact = re.sub(r"\s+", "", s)
+
+    # (2) pairwise dup glyph extraction: AABBCC... -> ABC...
     n = len(compact)
-    if n >= 2 and n % 2 == 0:
+    if FIX_DOUBLED_TEXT and n >= 2 and n % 2 == 0 and compact[0::2] == compact[1::2]:
+        compact = compact[0::2]
+
+    # (3) whole-string duplication: ABCABC -> ABC
+    n = len(compact)
+    if FIX_DOUBLED_TEXT and n >= 2 and n % 2 == 0:
         half = n // 2
-        if compact[0::2] == compact[1::2]:
-            return compact[0::2]
         if compact[:half] == compact[half:]:
-            return compact[:half]
+            compact = compact[:half]
+
+    # (4) written Shanghainese fixes
+    compact = compact.replace("亻那", "㑚").replace("口伐", "𠲎")
+    compact = re.sub(r"㑚\s*那", "㑚", compact)
+    compact = re.sub(r"𠲎\s*伐", "𠲎", compact)
+
+    # (5) your new dedup sanity rules (optional)
+    if FIX_DOUBLED_TEXT:
+        compact = _dedup_sanity(compact)
+        # re-apply hybrids after dedup
+        compact = re.sub(r"㑚\s*那", "㑚", compact)
+        compact = re.sub(r"𠲎\s*伐", "𠲎", compact)
+
     return compact
 
+# Normalise Ext B-less Shanghainese
+def normalize_shanghainese_text(text: str, enable_dedup: bool = True) -> str:
+    """
+    Normalise common written Shanghainese quirks + optionally apply dedup sanity checks.
+    """
+    if not isinstance(text, str):
+        text = "" if text is None else str(text)
+
+    s = text.strip()
+
+    # --- canonical replacements (component-y spellings) ---
+    s = s.replace("亻那", "㑚")
+    s = s.replace("口伐", "𠲎")
+
+    # --- hybrids that show up after partial conversion / spacing ---
+    # 㑚 那 -> 㑚 (also 㑚那)
+    s = re.sub(r"㑚\s*那", "㑚", s)
+
+    # 𠲎伐 -> 𠲎 (also with spaces)
+    s = re.sub(r"𠲎\s*伐", "𠲎", s)
+
+    # optional dedup sanity
+    if enable_dedup:
+        s = _dedup_sanity(s)
+
+        # re-apply hybrids once more, because dedup may create them
+        s = re.sub(r"㑚\s*那", "㑚", s)
+        s = re.sub(r"𠲎\s*伐", "𠲎", s)
+
+    return s
 
 def row_key(text: str, ipa_input: bool, speed: float) -> str:
     raw = f"{text}|ipa={ipa_input}|speed={speed}"
@@ -556,7 +687,7 @@ def tts_generate_with_retries(
 
             mp3 = wav_to_mp3(Path(saved), mp3_path, pbar=pbar)
             if mp3 and mp3.exists():
-                # 🔒 NEW: sanity-check MP3
+                # sanity-check MP3 in case it's empty
                 if not audio_nonempty(mp3):
                     raise RuntimeError(f"Empty MP3 after conversion: {mp3}")
 
@@ -568,9 +699,9 @@ def tts_generate_with_retries(
 
                 return mp3, mp3.name
 
-                # Fallback: WAV only (already checked above)
-                return Path(saved), Path(saved).name
-                _log(f"[DEBUG] saved audio to: {saved} exists={Path(saved).exists()}")
+            # Fallback to WAVs
+            _log(f"[WAV Fallback] Using {Path(saved).name}")
+            return Path(saved), Path(saved).name
 
         except Exception as e:
             last_err = e
@@ -676,11 +807,24 @@ def process_rows(
             speed = 1.0
 
         key = row_key(text, ipa_input, speed)
-        if key in state["done"]:
+        if key in state["done"]: # this also lets it overwrite if audio is done
+            csv_rom = get_csv_romanisation(row)
+            if csv_rom:
+                if state["done"][key].get("romanisation", "") != csv_rom:
+                    state["done"][key]["romanisation"] = csv_rom
+                    state["done"][key]["updated"] = time.time()
+                    save_state(state)
             continue
 
-        roman = romanise_sentence(text, romap, maxlen)
-        roman = postprocess_romanisation(roman)
+        # BYOR (Bring your Own Romanisation)
+        csv_rom = get_csv_romanisation(row)
+        roman = choose_romanisation(
+            shanghainese=text,
+            romanisation_csv=csv_rom,
+            romap=romap,
+            maxlen=maxlen,
+        )
+
         base = AUDIO_DIR / safe_audio_basename(key)
 
         try:
@@ -765,7 +909,12 @@ def retry_failed_queue(
         except ValueError:
             speed = 1.0
 
-        roman = romanise_sentence(text, romap, maxlen)
+        roman = choose_romanisation(
+            shanghainese=text,
+            romanisation_csv=r.get("romanisation", ""),
+            romap=romap,
+            maxlen=maxlen,
+        )
         base = AUDIO_DIR / safe_audio_basename(key)
 
         try:
@@ -816,6 +965,7 @@ def main(csv_path: str = "sentences.csv", deck_name: str = "Shanghainese TTS (HF
     ensure_dir(AUDIO_DIR)
 
     df = pd.read_csv(csv_path, encoding="utf-8-sig").fillna("")
+    rom_override = load_sentence_to_best_rom(df)
     if "shanghainese" not in df.columns:
         raise SystemExit("CSV must contain a 'shanghainese' column.")
 
@@ -850,6 +1000,9 @@ def main(csv_path: str = "sentences.csv", deck_name: str = "Shanghainese TTS (HF
     for _, rec in state["done"].items():
         text = rec["text"]
         roman = rec.get("romanisation", "")
+        k = norm_key(rec.get("text", ""))
+        if k in rom_override:
+            roman = rom_override[k]
         mandarin = rec.get("mandarin", "")
         meaning = rec.get("meaning", "")
         audio_path = Path(rec["audio_path"])
