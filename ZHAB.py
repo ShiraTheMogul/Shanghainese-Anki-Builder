@@ -64,6 +64,7 @@ JITTER_SECONDS = 0.6
 FAILED_QUEUE_PASSES = 6
 FAILED_PASS_PAUSE_SECONDS = 20.0
 RETRY_FAILED_EVERY_N_SUCCESSES = 50  # 0 disables mid-run retry
+MIN_AUDIO_BYTES = 4096   # 4 KB - check to see if audio isn't empty.
 
 OUT_DIR = Path("out")
 AUDIO_DIR = OUT_DIR / "audio"
@@ -185,6 +186,12 @@ def load_failed_df() -> pd.DataFrame:
         columns=["key", "id", "shanghainese", "mandarin", "meaning", "ipa_input", "speed", "error", "attempts"]
     )
 
+
+def audio_nonempty(path: Path) -> bool:
+    try:
+        return path.exists() and path.stat().st_size >= MIN_AUDIO_BYTES
+    except Exception:
+        return False
 
 def rewrite_failed_df(df: pd.DataFrame) -> None:
     if len(df) == 0:
@@ -542,19 +549,28 @@ def tts_generate_with_retries(
             _log(f"[DEBUG] predict() return type={type(result)} value={str(result)[:200]}")
 
             saved = save_audio_result(result, wav_path)
-            _log(f"[DEBUG] saved audio to: {saved} exists={Path(saved).exists()}")
+
+            # Check if the audio is empty.
+            if not audio_nonempty(Path(saved)):
+                raise RuntimeError(f"Empty or too-small audio file: {saved}")
 
             mp3 = wav_to_mp3(Path(saved), mp3_path, pbar=pbar)
             if mp3 and mp3.exists():
+                # 🔒 NEW: sanity-check MP3
+                if not audio_nonempty(mp3):
+                    raise RuntimeError(f"Empty MP3 after conversion: {mp3}")
+
                 if not KEEP_WAV:
                     try:
                         wav_path.unlink(missing_ok=True)
                     except Exception:
                         pass
+
                 return mp3, mp3.name
 
-            # If mp3 conversion skipped/failed, return wav
-            return Path(saved), Path(saved).name
+                # Fallback: WAV only (already checked above)
+                return Path(saved), Path(saved).name
+                _log(f"[DEBUG] saved audio to: {saved} exists={Path(saved).exists()}")
 
         except Exception as e:
             last_err = e
