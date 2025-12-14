@@ -76,7 +76,7 @@ DECK_ID = 190101002
 
 BRACKET_UNKNOWN = True
 KEEP_WAV = True
-PRINT_ROMANISATION = True
+PRINT_ROMANISATION = False
 
 # Force a specific fn_index (set to 1 to skip autodetect; deprecated):
 FORCE_FN_INDEX: Optional[int] = None
@@ -569,31 +569,52 @@ def tts_generate_with_retries(
 # =========================
 def build_anki(deck_name: str, notes: list, media_files: list, out_apkg: Path) -> None:
     model = genanki.Model(
-        MODEL_ID,
-        "ShanghaineseTTSModel",
-        fields=[
-            {"name": "Shanghainese"},
-            {"name": "Romanisation"},
-            {"name": "Mandarin"},
-            {"name": "Meaning"},
-            {"name": "Audio"},
-        ],
-        templates=[
-            {
-                "name": "Card 1",
-                "qfmt": (
-                    "<div style='font-size:28px'>{{Shanghainese}}</div>"
-                    "<div style='margin-top:8px; font-size:20px'>{{Romanisation}}</div>"
-                ),
-                "afmt": (
-                    "{{FrontSide}}<hr>"
-                    "<div style='font-size:22px'>{{Mandarin}}</div>"
-                    "<div style='margin-top:6px;'>{{Meaning}}</div>"
-                    "<br>{{Audio}}"
-                ),
-            }
-        ],
-    )
+    MODEL_ID,
+    "ShanghaineseTTSModel",
+    fields=[
+        {"name": "Shanghainese"},
+        {"name": "Romanisation"},
+        {"name": "Mandarin"},
+        {"name": "Meaning"},
+        {"name": "Audio"},
+    ],
+    templates=[
+        {
+            "name": "Card 1",
+            "qfmt": (
+                "<div style='font-size:28px'>{{Shanghainese}}{{Audio}}</div>"
+                "<div style='margin-top:8px; font-size:20px'>{{Romanisation}}</div>"
+            ),
+            "afmt": (
+                "{{FrontSide}}<hr>"
+                "<div style='font-size:22px'>{{Mandarin}}</div>"
+                "<div style='margin-top:6px;'>{{Meaning}}</div>"
+                "<br>{{Audio}}"
+            ),
+        }
+    ],
+    css="""
+/* ZHAB deck styling */
+.card {
+  font-size: 20px;
+  line-height: 1.35;
+  text-align: left;
+  font-family:
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    "Noto Sans CJK JP",
+    "Noto Sans SC",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    "SimSun",
+    "Arial Unicode MS",
+    sans-serif;
+}
+hr { opacity: 0.25; }
+"""
+)
+
 
     deck = genanki.Deck(DECK_ID, deck_name)
 
