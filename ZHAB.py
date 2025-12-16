@@ -58,7 +58,7 @@ from tqdm import tqdm
 # =========================
 SPACE_ID = "https://cjangcjengh-shanghainese-tts.hf.space"
 
-RIME_DICT_URL = "https://raw.githubusercontent.com/wugniu/rime-yahwe_zaonhe/master/yahwe_zaonhe.dict.yaml"
+RIME_DICT_URL = "https://raw.githubusercontent.com/NGLI/rime-wugniu_zaonhe/08108397722f7c52463d474a06a49633878836f5/wugniu_zaonhe.dict.yaml"
 
 MAX_ATTEMPTS_PER_ROW = 4
 BASE_BACKOFF_SECONDS = 2.0
